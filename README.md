@@ -22,7 +22,7 @@ conda env create -f environment.yml
 
 ## Cite this work
 
-The work corcerning for EDeMOs Kenya has been carried out by [Roberto Heredia-Fonseca](https://profiles.imperial.ac.uk/r.heredia-fonseca). This work is based on the work EDeMOS Zambia [^6].
+The work corcerning for EDeMOs Kenya has been carried out by [Roberto Heredia-Fonseca](https://profiles.imperial.ac.uk/r.heredia-fonseca). This research builds upon the EDeMOS Zambia [^6].
 
 [^1]: Falchetta, G., Pachauri, S., Parkinson, S. et al. A high-resolution gridded dataset to assess electrification in sub-Saharan Africa. Sci Data 6, 110 (2019). https://doi.org/10.1038/s41597-019-0122-6.
 [^2]: Kummu, M., Taka, M. & Guillaume, J. Gridded global datasets for Gross Domestic Product and Human Development Index over 1990–2015. Sci Data 5, 180004 (2018). https://doi.org/10.1038/sdata.2018.4.
