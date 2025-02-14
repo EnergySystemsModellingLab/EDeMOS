@@ -36,4 +36,4 @@ Data sets used in this work can also be accessed in the Zenodo repository [^7].
 Zenodo. https://doi.org/10.5281/zenodo.14757583.
 [^5]: Leasure DR, Dooley CA, Bondarenko M, Tatem AJ. 2021. peanutButter: An R package to produce rapid-response gridded population estimates from building footprints, version 1.0.0. WorldPop, University of Southampton. doi: 10.5258/SOTON/WP00717. https://github.com/wpgp/peanutButter
 [^6]: Millot, A., Kerekeš, A., Korkovelos, A., Stringer M., and Hawkes A. EDeMOS_Zambia. GitHub repository. Accessed February 10, 2025. https://github.com/ariane-millot/EDeMOS_Zambia.
-[^7] Heredia-Fonseca, R., Millot, A., Kerekeš, A., Korkovelos, A., Stringer, M., & Hawkes, A. (2025). Data Used for EDeMOS (Electricity Demand Mapping from Open-Source Data): Kenya Case Study (V1.0) [Data set]. Zenodo. https://doi.org/10.5281/zenodo.14848898
+[^7]: Heredia-Fonseca, R., Millot, A., Kerekeš, A., Korkovelos, A., Stringer, M., & Hawkes, A. (2025). Data Used for EDeMOS (Electricity Demand Mapping from Open-Source Data): Kenya Case Study (V1.0) [Data set]. Zenodo. https://doi.org/10.5281/zenodo.14848898
