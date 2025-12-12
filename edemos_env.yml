@@ -28,4 +28,5 @@ dependencies:
     - matplotlib-scalebar
     - seaborn
     - exactextract
+    - openpyxl
 

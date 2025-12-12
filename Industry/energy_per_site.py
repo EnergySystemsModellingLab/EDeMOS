@@ -12,102 +12,138 @@ import os
 import numpy as np
 import geopandas as gpd
 import fiona
+import openpyxl
 import config
+import Industry.specified_energy as specified_energy
+# import specified_energy as specified_energy
+
+
+def load_known_production(file_path, target_year):
+    """
+    Loads specific mine production data from an external file.
+    Expected columns: 'FeatureNam', 'Year', 'Production'
+    Returns a dictionary: {'MineName': Production_Value}
+    """
+    known_map = {}
+    try:
+        df_add = pd.read_excel(file_path)
+        # Filter for the correct year
+        df_add = df_add[df_add["Year"] == target_year]
+        # Create dictionary
+        known_map = dict(zip(df_add["FeatureNam"], df_add["Production (t_Cu)"]))
+
+        print(f"Loaded {len(known_map)} known production values from Additional Info.")
+    except Exception as e:
+        print(f"Warning: Could not load Additional Info file ({e}). Proceeding without known values.")
+    return known_map
+
+
+def get_usgs_production_targets(file_path, target_year):
+    """
+    Reads the USGS Excel file and extracts Ore and Metal production targets
+    for the specific year.
+    """
+    targets = {"Ore": 0, "Metal": 0}
+
+    # Helper to clean numbers (e.g., converts "655,500 r" to 655500.0)
+    def _clean_val(val):
+        if isinstance(val, (int, float)):
+            return float(val)
+        if isinstance(val, str):
+            # Remove everything except digits (removes commas, 'r', 'e', etc.)
+            clean_str = ''.join(filter(str.isdigit, val))
+            return float(clean_str) if clean_str else 0.0
+        return 0.0
+
+    try:
+        # Load Excel
+        df_usgs = pd.read_excel(file_path, sheet_name="Table 1", header=None)
+
+        # Clean whitespace in string columns
+        df_usgs = df_usgs.map(lambda x: x.strip() if isinstance(x, str) else x)
+
+        # 1. Find the column index for the target YEAR
+        year_col_idx = None
+        # Search the first 10 rows and all columns
+        found_year = False
+        for r in range(min(15, len(df_usgs))): # Scan top 15 rows
+            for c in range(len(df_usgs.columns)):
+                cell_value = str(df_usgs.iloc[r, c])
+                # Check if year is in the cell (e.g. "2019" or "2019 (estimated)")
+                if str(target_year) in cell_value:
+                    year_col_idx = c
+                    found_year = True
+                    break
+            if found_year:
+                break
+
+        if year_col_idx is None:
+            print(f"Warning: Year {target_year} not found in USGS file. Using default 0.")
+            return targets
+
+        # 2. Locate Data Rows (Assume Commodity Name is in Column 0)
+        col_commodity = df_usgs.columns[0]
+
+        # --- A. Get Mine Concentrate (Ore) ---
+        mask_ore = df_usgs[col_commodity].astype(str).str.contains("Mine, concentrates, Cu content", case=False, na=False)
+        mask_electro = df_usgs[col_commodity].astype(str).str.contains("Electrowon", case=False, na=False)
+        val_concentrates = 0
+        val_electro = 0
+
+        if mask_ore.any():
+            raw_val = df_usgs.loc[mask_ore, year_col_idx].values[0]
+            val_concentrates = _clean_val(raw_val)
+
+        if mask_electro.any():
+            # Take the first occurrence (Primary)
+            raw_val = df_usgs.loc[mask_electro, year_col_idx].values[0]
+            val_electro = _clean_val(raw_val)
+
+        targets["Ore"] = val_concentrates + val_electro
+
+        # --- B. Get Smelter and Electrowon (Metal) ---
+        mask_smelter = df_usgs[col_commodity].astype(str).str.contains("Smelter, primary", case=False, na=False)
+
+        val_smelter = 0
+
+        if mask_smelter.any():
+            raw_val = df_usgs.loc[mask_smelter, year_col_idx].values[0]
+            val_smelter = _clean_val(raw_val)
+
+        targets["Metal"] = val_smelter + val_electro
+
+        print(f"USGS Targets for {target_year} -> Ore: {targets['Ore']:,.0f}, Metal: {targets['Metal']:,.0f}")
+        return targets
+
+    except Exception as e:
+        print(f"Error reading USGS Excel: {e}. Falling back to defaults (0).")
+        return targets
 
 def calc_energy_per_site(app_config):
-  
+
+    #----------------------------------
+    # settings
     country = app_config.COUNTRY
     metals = ["Copper", "Cobalt", "Gold", "Nickel", "Manganese"]
     electrowon_names = ["Slag Recovery","Heap Leach","Leach","Solvent Extraction-Electrowinning", "Electrowinning", "Solvent Extraction"]
-
-    input_table = pd.read_csv(app_config.MINES_INPUT_CSV)
-    input_table = input_table[input_table["Country"]==country]
-    input_table = input_table.loc[input_table["DsgAttr02"].isin(metals)].reset_index()
-    
-    #----------------------------------
-    # settings
     ## general
     plant_usage_ore = {"Copper": 0.773, "Cobalt":0, "Gold":0.853, "Nickel":0.285, "Manganese":0.942} # Co from mining not considered
     plant_usage_metal = {"Copper":  0.312, "Cobalt":0.136, "Gold":0.853, "Nickel":0, "Manganese":0.942} # no Ni metal production, no Au metal statistics, Mn ore and fero- or siliconmanganese statistics
     ore_grade = {"Copper":0.0103, "Cobalt":0} # cobalt from mining not considered
-    concentrate_grade = 0.3
+    # concentrate_grade = 0.3
     unit_conversion = {"Thousand metric tons":10**3, "Metric tons":1, "Kilograms":10**-3} # into t
-    
-    ## energy usage for different processes and their types
-    ## Units: GJ/t_Cu
-    spec_energy = {"Copper": {"Elec": {"Mining":{}, "Smelting":{}}, "Diesel":{"Mining":{}, "Smelting":{}}},
-                   "Cobalt":{"Elec":{"Mining":{}}, "Diesel":{"Mining":{}}},
-                   "Gold":{"Elec":{"Mining":{}}, "Diesel":{"Mining":{}}},
-                   "Nickel":{"Elec":{"Mining":{}}, "Diesel":{"Mining":{}}},
-                   "Manganese":{"Elec":{"Mining":{}}, "Diesel":{"Mining":{}}}}
-    
-    ### mining
-    spec_energy["Copper"]["Elec"]["Mining"]["Open Pit"]= 0        # https://doi.org/10.1016/j.jclepro.2019.118978
-    spec_energy["Copper"]["Diesel"]["Mining"]["Open Pit"]= 10.2   # https://doi.org/10.1016/j.jclepro.2019.118978
-    spec_energy["Copper"]["Elec"]["Mining"]["Underground"]= 2.15  # https://doi.org/10.1016/j.jclepro.2019.118978
-    spec_energy["Copper"]["Diesel"]["Mining"]["Underground"]= 2.15 # https://doi.org/10.1016/j.jclepro.2019.118978
-    mining_default = "Underground"
-    spec_energy["Copper"]["Elec"]["Milling"] = 0.4*24 # weir engeco: Mining energy consumption 2021
-    spec_energy["Copper"]["Diesel"]["Milling"]= 0     # weir engeco: Mining energy consumption 2021
-    
-    spec_energy["Cobalt"]["Elec"]["Mining"][mining_default]= np.nan # placeholder
-    spec_energy["Cobalt"]["Diesel"]["Mining"][mining_default]= np.nan # placeholder
-    spec_energy["Cobalt"]["Elec"]["Milling"]= np.nan # placeholder
-    spec_energy["Cobalt"]["Diesel"]["Milling"]= np.nan # placeholder
-    
-    spec_energy["Gold"]["Elec"]["Mining"][mining_default]= (24.11*10**3)/2
-    spec_energy["Gold"]["Diesel"]["Mining"][mining_default]=(223.21+36.21)*10**3/2
-    spec_energy["Gold"]["Elec"]["Milling"]= (96.71+34.81)*10**3/2 
-    spec_energy["Gold"]["Diesel"]["Milling"]= 0
-    
-    spec_energy["Nickel"]["Elec"]["Mining"][mining_default]= 18       
-    spec_energy["Nickel"]["Diesel"]["Mining"][mining_default]=12.5
-    spec_energy["Nickel"]["Elec"]["Milling"]= 0       #Mining+Milling one value
-    spec_energy["Nickel"]["Diesel"]["Milling"]= 0  #Mining+Milling one value
-    
-    spec_energy["Manganese"]["Elec"]["Mining"][mining_default]= 0.025     
-    spec_energy["Manganese"]["Diesel"]["Mining"][mining_default]= 0.17
-    spec_energy["Manganese"]["Elec"]["Milling"]= 0    #Mining+Milling one value
-    spec_energy["Manganese"]["Diesel"]["Milling"]= 0  #Mining+Milling one value
-    
-    ### smelting
-    spec_energy["Copper"]["Elec"]["Smelting"]["Flash smelting"]= 9.266 # https://link.springer.com/article/10.1007/s11837-015-1380-1
-    spec_energy["Copper"]["Diesel"]["Smelting"]["Flash smelting"]= 1.518 # https://link.springer.com/article/10.1007/s11837-015-1380-1
-    spec_energy["Copper"]["Elec"]["Smelting"]["Isasmelt"]= 6.903 # https://link.springer.com/article/10.1007/s11837-015-1380-1
-    spec_energy["Copper"]["Diesel"]["Smelting"]["Isasmelt"]= 4.175 # https://link.springer.com/article/10.1007/s11837-015-1380-1
-    spec_energy["Copper"]["Elec"]["Smelting"]["Mitsubishi"]= 8.508 # https://link.springer.com/article/10.1007/s11837-015-1380-1
-    spec_energy["Copper"]["Diesel"]["Smelting"]["Mitsubishi"]= 2.498 # https://link.springer.com/article/10.1007/s11837-015-1380-1
-    spec_energy["Copper"]["Elec"]["Smelting"]["average"]= 0.4*8.9 # https://elib.dlr.de/130069/1/Renewable%20energy%20in%20copper%20production%20-%20a%20review.pdf
-    spec_energy["Copper"]["Diesel"]["Smelting"]["average"]= 0.6*8.9 # https://elib.dlr.de/130069/1/Renewable%20energy%20in%20copper%20production%20-%20a%20review.pdf
-    smelting_default = "Flash smelting"
-    ### refining
-    spec_energy["Copper"]["Elec"]["Refining"]= 3.2*0.4 + 5.76 # https://elib.dlr.de/130069/1/Renewable%20energy%20in%20copper%20production%20-%20a%20review.pdf
-                                                              # https://www.bmwk.de/Redaktion/DE/Downloads/E/energiewende-in-der-industrie-ap2a-branchensteckbrief-metall.pdf?__blob=publicationFile&v=4
-    spec_energy["Copper"]["Diesel"]["Refining"]= 3.2*0.6  + 7.2 # https://elib.dlr.de/130069/1/Renewable%20energy%20in%20copper%20production%20-%20a%20review.pdf
-                                                                # https://www.bmwk.de/Redaktion/DE/Downloads/E/energiewende-in-der-industrie-ap2a-branchensteckbrief-metall.pdf?__blob=publicationFile&v=4
-    
-    ### leaching, solvent extraction and electrowinning
-    spec_energy["Copper"]["Elec"]["Hydrometallurgical"]= 14.7*0.85 + 5.76 # https://elib.dlr.de/130069/1/Renewable%20energy%20in%20copper%20production%20-%20a%20review.pdf
-                                                                        # https://www.bmwk.de/Redaktion/DE/Downloads/E/energiewende-in-der-industrie-ap2a-branchensteckbrief-metall.pdf?__blob=publicationFile&v=4
-    spec_energy["Copper"]["Diesel"]["Hydrometallurgical"]= 14.7*0.15 + 7.2 # https://elib.dlr.de/130069/1/Renewable%20energy%20in%20copper%20production%20-%20a%20review.pdf
-                                                                    # https://www.bmwk.de/Redaktion/DE/Downloads/E/energiewende-in-der-industrie-ap2a-branchensteckbrief-metall.pdf?__blob=publicationFile&v=4 
-    ### smelting, refining = processing
-    spec_energy["Cobalt"]["Elec"]["Smelting/Refining"]= 13.57
-    spec_energy["Cobalt"]["Diesel"]["Smelting/Refining"]= 0
-    
-    spec_energy["Gold"]["Elec"]["Smelting/Refining"]= (52.08+38.86)*10**3/2 # Asuming total energy = elec
-    spec_energy["Gold"]["Diesel"]["Smelting/Refining"]= 0
-    
-    spec_energy["Nickel"]["Elec"]["Smelting/Refining"]= 200 # Asuming total energy = elec
-    spec_energy["Nickel"]["Diesel"]["Smelting/Refining"]= 0
-    
-    spec_energy["Manganese"]["Elec"]["Smelting/Refining"]= 18.01
-    spec_energy["Manganese"]["Diesel"]["Smelting/Refining"]= 13.02
-    
-    #-----------------------------------
-    
+    spec_energy = specified_energy.SPEC_ENERGY
+    mining_default = specified_energy.MINING_DEFAULT
+    smelting_default = specified_energy.SMELTING_DEFAULT
+
+    #----------------------------------
+
+    ## Load USGS data
+    input_table = pd.read_csv(app_config.MINES_INPUT_CSV)
+    input_table = input_table[input_table["Country"]==country]
+    input_table = input_table.loc[input_table["DsgAttr02"].isin(metals)].reset_index()
     output_table = input_table[["Country", "FeatureNam", "DsgAttr02", "DsgAttr03", "DsgAttr06", "MemoOther", "MemoLoc","Latitude", "Longitude", "DsgAttr07", "DsgAttr08"]].copy()
-    
+
     # Create a list of all possible outputs and allocate Metal or Ore and concentrate to each process
     # clear output type
     output_type_list = []
@@ -125,35 +161,125 @@ def calc_energy_per_site(app_config):
                 output_name = ""
         output_type_list.append(output_name)
     output_table["Output type (ass.)"] = output_type_list
-    
+
     # Assess production level for each site
-    # clear production
-    production_2017 = []
-    for idx, production in enumerate(input_table["DsgAttr07"]):
-        metal = input_table["DsgAttr02"][idx]
+
+    # a. load usgs total and known production values
+    usgs_targets = get_usgs_production_targets(app_config.TOTAL_PROD_USGS_FILE, app_config.YEAR)
+    known_production_map = load_known_production(app_config.ADD_INFO_FILE, app_config.YEAR)
+
+    # Map the known values to the table based on FeatureNam
+    mapped_values = output_table["FeatureNam"].map(known_production_map)
+
+    # Assign to column ONLY if the commodity is Copper
+    # Logic: If DsgAttr02 is 'Copper', take the mapped value. Otherwise, set to NaN.
+    output_table["Known_Production_Tonnes"] = np.where(
+        output_table["DsgAttr02"] == "Copper",
+        mapped_values,
+        np.nan
+    )
+    # -------------------------------------------------------------------------
+
+    # b. clear production_capacity
+    production_capacities_2017 = []
+    for idx, production_capacity in enumerate(input_table["DsgAttr07"]):
+        # metal = input_table["DsgAttr02"][idx]
         unit_orig = input_table["DsgAttr08"][idx]
         
-        if production <0:
-            production = np.nan
+        if production_capacity <0:
+            production_capacity = np.nan
             print("Production at a site ", output_table["FeatureNam"][idx], " in ", country, " is missing (negative). Value set to zero. Please, change the input in the input file.")
         elif "Capacity is a combination" in output_table["MemoOther"][idx]:
             number = output_table["MemoOther"].tolist().count(output_table["MemoOther"][idx]) # how many plants are giving the combined capacity
-            production = production / number 
-        if output_table["Output type (ass.)"][idx]=="Metal":
-            plant_usage = plant_usage_metal[metal]
-        else:
-            plant_usage = plant_usage_ore[metal]
+            production_capacity = production_capacity / number
         try:
-            production_2017.append(production*plant_usage*unit_conversion[unit_orig]) 
+            production_capacity = production_capacity * unit_conversion[unit_orig]
         except:
-            production_2017.append(production*plant_usage) # original unit is sometimes nan
-    output_table["Production (ass.) 2019 [t]"] = production_2017
+            production_capacity = production_capacity # original unit is sometimes nan
+        production_capacities_2017.append(production_capacity)
+    output_table["production_capacity_modified"] = production_capacities_2017
+
+    # c. Compute Dynamic Plant Usage Factors
+    # Factor = Total_USGS_Production / Total_Input_Capacity
+
+    # Calculate Total Input Capacities for Copper
+    # Filter for Copper and specific output types
+    is_copper = output_table["DsgAttr02"] == "Copper"
+    is_ore = output_table["Output type (ass.)"] == "Ore and concentrate"
+    is_metal = output_table["Output type (ass.)"] == "Metal"
+
+    # Identify which rows have KNOWN values vs which rely on CAPACITY
+    # valid_cap: capacity is not nan
+    # is_unknown: we do NOT have a value in Additional_info
+    has_known_val = output_table["Known_Production_Tonnes"].notna()
+    is_unknown = output_table["Known_Production_Tonnes"].isna()
+
+    # 1. Calculate how much production is already accounted for by "Additional_info"
+    # We assume known values in Additional_info match the output type (Ore vs Metal) correctly implicitly
+    # (i.e. if a mine is an Ore mine, the value in Excel is Ore)
+
+    known_prod_ore = output_table.loc[is_copper & is_ore & has_known_val, "Known_Production_Tonnes"].sum()
+    known_prod_metal = output_table.loc[is_copper & is_metal & has_known_val, "Known_Production_Tonnes"].sum()
+
+    print(f"Known Production (Fixed) -> Ore: {known_prod_ore:,.0f} Metal: {known_prod_metal:,.0f}")
+
+    # 2. Calculate the REMAINING USGS Target
+    # If known production exceeds USGS, we floor the remaining target at 0 to avoid negative factors
+    target_remaining_ore = max(0, usgs_targets["Ore"] - known_prod_ore)
+    target_remaining_metal = max(0, usgs_targets["Metal"] - known_prod_metal)
+
+    print(f"Remaining USGS Target -> Ore: ", f"{target_remaining_ore:,.0f}"," Metal: ", f"{target_remaining_metal:,.0f}")
+
+    # 3. Calculate the Capacity of the UNKNOWN mines only
+    cap_remaining_ore = output_table.loc[is_copper & is_ore & is_unknown, "production_capacity_modified"].sum()
+    cap_remaining_metal = output_table.loc[is_copper & is_metal & is_unknown, "production_capacity_modified"].sum()
+
+    print(f"Remaining Capacity -> Ore: {cap_remaining_ore:,.0f}, Metal: {cap_remaining_metal:,.0f}")
+
+    # Update the plant_usage dictionary for Copper
+    if target_remaining_ore > 0 and cap_remaining_ore > 0:
+        plant_usage_ore["Copper"] = target_remaining_ore/ ore_grade["Copper"] / cap_remaining_ore
+        print(f"Calculated Copper Ore Usage Factor (Adjusted): {plant_usage_ore['Copper']:.4f}")
+
+    if target_remaining_metal > 0 and cap_remaining_metal > 0:
+        plant_usage_metal["Copper"] = target_remaining_metal / cap_remaining_metal
+        print(f"Calculated Copper Metal Usage Factor (Adjusted): {plant_usage_metal['Copper']:.4f}")
+
+    # 4. Final Calculation: Apply factors to individual rows
+    # Now we apply the (potentially updated) usage factors to the normalized capacity
+
+    final_production = []
+
+    for idx, row in output_table.iterrows():
+        metal = row["DsgAttr02"]
+        norm_cap = row["production_capacity_modified"]
+        output_type = row["Output type (ass.)"]
+        known_val = row["Known_Production_Tonnes"]
+        # Check if there is a known production value (not NaN)
+        if metal == "Copper" and pd.notna(known_val):
+            prod = known_val/ore_grade[metal]
+        else:# Determine usage factor
+            if output_type == "Metal":
+                usage = plant_usage_metal.get(metal, 0)
+            else:
+                usage = plant_usage_ore.get(metal, 0)
+            # Calc
+            prod = norm_cap * usage
+
+        final_production.append(prod)
+
+    col_name_prod = f"Production_assessed_{app_config.YEAR}_[t]"
+    output_table[col_name_prod] = final_production
       
     # Production of copper content in kt
     metal_content_list = []
-    for idx, production in enumerate(output_table["Production (ass.) 2019 [t]"]):
+    for idx, production in enumerate(output_table[col_name_prod]):
         metal = input_table["DsgAttr02"][idx]
-        
+        # known_val = row["Known_Production_Tonnes"]
+        # # Check if there is a known production value (not NaN)
+        # if metal == "Copper" and pd.notna(known_val):
+        #     metal_content_list.append(known_val/1000)
+        # else:
         if output_table["Output type (ass.)"][idx]=="Ore and concentrate":
             metal_content_list.append(production*ore_grade[metal]/1000) # conversion in kt metal
         else:
@@ -218,8 +344,10 @@ def calc_energy_per_site(app_config):
                                             +spec_energy[metal][en_carrier]["Milling"])
             
             elif element == "Metal":
-                if output_table["Metal processing"][idx] in ["Refining","Hydrometallurgical","Smelting/Refining"]:
+                if output_table["Metal processing"][idx] in ["Hydrometallurgical","Smelting/Refining"]:
                     spec_energy_list.append(spec_energy[metal][en_carrier][output_table["Metal processing"][idx]])
+                elif output_table["Metal processing"][idx] in ["Refinery"]:
+                    spec_energy_list.append(spec_energy[metal][en_carrier]["Refining"])
                 elif output_table["Metal processing"][idx]=="Smelter+Refinery":
                     spec_energy_list.append(spec_energy[metal][en_carrier]["Refining"]+spec_energy[metal][en_carrier]["Smelting"]["Flash smelting"])
                 else:
@@ -240,6 +368,94 @@ def calc_energy_per_site(app_config):
         "Elec_TJ": app_config.COL_IND_ELEC_TJ,
         "Diesel_TJ": app_config.COL_IND_OIL_TJ
     })
+
+    # =========================================================================
+    # ---- SECTION: BREAKDOWN BY PROCESS STEP (ELECTRICITY ONLY) ----
+    # =========================================================================
+
+    # Initialize separate columns for each step
+    steps = ["Mining", "Milling", "Smelting", "Refining", "Leaching_EW"]
+    for step in steps:
+        output_table[f"Elec_Step_{step}_TJ"] = 0.0
+
+    # We iterate again to apply step-specific intensities
+    # This logic mirrors the aggregation logic above but keeps values separate
+    en_carrier = "Elec"
+
+    for idx, row in output_table.iterrows():
+        metal = row["DsgAttr02"]
+        out_type = row["Output type (ass.)"]
+        metal_kt = row["Metal content [kt]"]
+
+        # Skip rows with no production
+        if metal_kt == 0:
+            continue
+
+        # 1. ORE/CONCENTRATE: Mining + Milling
+        if out_type in ["Ore and concentrate", "Metal in ore"]:
+            # Mining Step
+            mine_t = row["Mine type"]
+            try:
+                # Try specific mine type (Open Pit/Underground)
+                val_mining = spec_energy[metal][en_carrier]["Mining"][mine_t]
+            except:
+                # Default
+                val_mining = spec_energy[metal][en_carrier]["Mining"][mining_default]
+
+            # Milling Step
+            val_milling = spec_energy[metal][en_carrier]["Milling"]
+
+            # Assign to columns (TJ = kt * GJ/t)
+            output_table.at[idx, "Elec_Step_Mining_TJ"] = metal_kt * val_mining
+            output_table.at[idx, "Elec_Step_Milling_TJ"] = metal_kt * val_milling
+
+        # 2. METAL: Smelting, Refining, or Hydrometallurgy
+        elif out_type == "Metal":
+            proc = row["Metal processing"]
+            proc_type = row["Metal process type"]
+
+            if proc == "Hydrometallurgical":
+                # Maps to Leaching/EW
+                val_hydro = spec_energy[metal][en_carrier]["Hydrometallurgical"]
+                output_table.at[idx, "Elec_Step_Leaching_EW_TJ"] = metal_kt * val_hydro
+
+            elif proc == "Smelter":
+                # Maps to Smelting
+                try:
+                    val_smelt = spec_energy[metal][en_carrier]["Smelting"][proc_type]
+                except:
+                    val_smelt = spec_energy[metal][en_carrier]["Smelting"][smelting_default]
+                output_table.at[idx, "Elec_Step_Smelting_TJ"] = metal_kt * val_smelt
+
+            elif proc == "Refinery":
+                # Maps to Refining
+                # val_ref = spec_energy[metal][en_carrier]["Smelting"][smelting_default]
+                val_ref = spec_energy[metal][en_carrier]["Refining"] #[smelting_default]
+                output_table.at[idx, "Elec_Step_Refining_TJ"] = metal_kt * val_ref
+
+            elif proc == "Smelter+Refinery":
+                # Split: Smelting (assume Flash) + Refining
+                val_smelt = spec_energy[metal][en_carrier]["Smelting"]["Flash smelting"]
+                val_ref = spec_energy[metal][en_carrier]["Refining"]
+
+                output_table.at[idx, "Elec_Step_Smelting_TJ"] = metal_kt * val_smelt
+                output_table.at[idx, "Elec_Step_Refining_TJ"] = metal_kt * val_ref
+
+            elif proc == "Smelting/Refining":
+                # For non-copper metals where we have a combined value
+                val_combined = spec_energy[metal][en_carrier]["Smelting/Refining"]
+                # We allocate this to Smelting for simplicity, or you could create a new 'Other_Process' col
+                output_table.at[idx, "Elec_Step_Smelting_TJ"] = metal_kt * val_combined
+
+            elif proc ==  "":
+                # Maps to Smelting
+                val_ref = spec_energy[metal][en_carrier]["Smelting"][smelting_default]
+                output_table.at[idx, "Elec_Step_Smelting_TJ"] = metal_kt * val_ref
+
+    # =========================================================================
+    # ---- END SECTION ----
+    # =========================================================================
+
 
     # ---- ADDITION FOR COPPER-SPECIFIC ELECTRICITY CONSUMPTION ----
     # Initialize the new column with 0
@@ -269,13 +485,7 @@ def calc_energy_per_site(app_config):
         os.remove(app_config.MINES_OUTPUT_GPKG)
         print("File deleted.")
     output_table_gdf.to_file(app_config.MINES_OUTPUT_GPKG, layer="mines", driver="GPKG", mode='w')
-    # try:
-    #     layer_names = fiona.listlayers(app_config.MINES_OUTPUT_GPKG)
-    #     print(f"Layers found in '{app_config.MINES_OUTPUT_GPKG}':")
-    #     for name in layer_names:
-    #         print(f"- {name}")
-    # except fiona.errors.DriverError as e:
-    #     print(f"Error: Could not open the file. Please check the path and ensure it's a valid GeoPackage file.\nDetails: {e}")
+
 
 
 if __name__ == "__main__":

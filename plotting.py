@@ -5,6 +5,7 @@ from matplotlib.colors import LogNorm
 from matplotlib_scalebar.scalebar import ScaleBar
 import matplotlib.colors as colors
 from shapely.geometry.point import Point
+import pandas as pd
 
 import geopandas as gpd
 import numpy as np
@@ -72,8 +73,8 @@ def plot_sector_consumption_map(grid_gdf, col_to_plot, app_config, admin_gdf_par
         # Warning: We filter > 0 here to avoid plotting thousands of empty dots
         dots_gdf = sorted_grid[sorted_grid[col_to_plot] > 0].copy()
 
-        # Use centroids. Note: specific warning suppression might be needed depending on CRS
-        dots_gdf['geometry'] = dots_gdf.geometry.centroid
+        # Use centroids.
+        dots_gdf['geometry'] = dots_gdf.to_crs(epsg=3857).centroid.to_crs(dots_gdf.crs)
 
         dots_gdf.plot(markersize=dot_markersize, **plot_kwargs)
     else:
@@ -117,3 +118,89 @@ def plot_sector_consumption_map(grid_gdf, col_to_plot, app_config, admin_gdf_par
     suffix = "_dots" if plot_as_dots else ""
     plt.savefig(app_config.OUTPUT_DIR / f'map_{sector_name}_demand_log_{app_config.COUNTRY}{suffix}.png', bbox_inches='tight')
     # plt.show()
+
+def plot_mining_process_breakdown(app_config):
+    # 1. Load the results file produced by the previous function
+    try:
+        df = pd.read_csv(app_config.MINES_OUTPUT_CSV)
+    except FileNotFoundError:
+        print(f"Error: Could not find {app_config.MINES_OUTPUT_CSV}. Run calc_energy_per_site first.")
+        return
+
+    # 2. Define the columns corresponding to the steps
+    step_columns = [
+        "Elec_Step_Mining_TJ",
+        "Elec_Step_Milling_TJ",
+        "Elec_Step_Smelting_TJ",
+        "Elec_Step_Refining_TJ",
+        "Elec_Step_Leaching_EW_TJ"
+    ]
+
+    # 3. Sum the columns to get totals
+    # If you want Copper only, uncomment the next line:
+    # df = df[df["DsgAttr02"] == "Copper"]
+
+    totals = df[step_columns].sum()
+
+    # 4. Prepare data for plotting
+    # Rename for cleaner labels in the chart
+    labels_map = {
+        "Elec_Step_Mining_TJ": "Mining (Extraction)",
+        "Elec_Step_Milling_TJ": "Milling (Crushing/Grinding)",
+        "Elec_Step_Smelting_TJ": "Smelting",
+        "Elec_Step_Refining_TJ": "Refining (Electro-refining)",
+        "Elec_Step_Leaching_EW_TJ": "Leaching & Electrowinning"
+    }
+
+    labels = [labels_map[col] for col in totals.index]
+    sizes = totals.values
+
+    # Calculate Total for title (convert TJ to TWh for readability if needed, or keep TJ)
+    total_tj = sizes.sum()
+
+    # 5. Create the Pie Chart
+    # Professional colors (blues/greens or distinct categorical colors)
+    colors = ['#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f']
+
+    fig, ax = plt.subplots(figsize=(10, 7))
+
+    # Create pie chart with percentage labels
+    wedges, texts, autotexts = ax.pie(
+        sizes,
+        labels=None, # We'll add a legend instead to keep it clean
+        autopct='%1.1f%%',
+        startangle=90,
+        colors=colors,
+        pctdistance=0.85, # Distance of the percentage text from center
+        explode=[0.05] * len(sizes) # Slight separation for all slices
+    )
+
+    # Style the text
+    for text in texts:
+        text.set_fontsize(12)
+    for autotext in autotexts:
+        autotext.set_color('white')
+        autotext.set_weight('bold')
+        autotext.set_fontsize(10)
+
+    # Add a donut hole (optional, looks modern)
+    centre_circle = plt.Circle((0,0),0.70,fc='white')
+    fig.gca().add_artist(centre_circle)
+
+    # 6. Add Legend and Title
+    ax.legend(wedges, labels,
+              title="Production process",
+              loc="center left",
+              bbox_to_anchor=(1, 0, 0.5, 1))
+
+    plt.setp(autotexts, size=10, weight="bold")
+
+    # ax.set_title(f"Share of Industrial Electricity Consumption by Process Step\n(Total Modeled: {total_tj/3600:.2f} TWh)", fontsize=14)
+    print(f"Share of Industrial Electricity Consumption by Process Step\n(Total Modeled: {total_tj/3600:.2f} TWh)")
+    plt.tight_layout()
+
+    # 7. Save or Show
+    filename = app_config.INDUSTRY_OUTPUT_DIR / "Mining_Breakdown.png"
+    plt.savefig(filename, dpi=300)
+    # print("Pie chart saved as Mining_Breakdown.png")
+    plt.show()

@@ -189,7 +189,12 @@ def calculate_household_numbers_popinput(grid_gdf, app_config, data_HH, df_censu
                                    df_censusdata['size_HH_urban'],
                                    df_censusdata['size_HH_rural'])
         grid_gdf[app_config.COL_HH_TOTAL] = grid_gdf[app_config.COL_POPULATION_WP] / grid_gdf['hh_size']
-
+    grid_gdf[app_config.COL_HH_URBAN] = np.where(grid_gdf[app_config.COL_LOC_ASSESSED] == 'urban',
+                                   grid_gdf[app_config.COL_HH_TOTAL],
+                                   0)
+    grid_gdf[app_config.COL_HH_RURAL] = np.where(grid_gdf[app_config.COL_LOC_ASSESSED] == 'rural',
+                               grid_gdf[app_config.COL_HH_TOTAL],
+                               0)
     return grid_gdf
 
 def calculate_household_numbers(grid_gdf, app_config, data_HH, regions_list):
@@ -332,7 +337,7 @@ def calculate_household_numbers(grid_gdf, app_config, data_HH, regions_list):
     print("Finished calculating household numbers.")
     return grid_gdf, df_HH_buildings
 
-def estimate_hh_with_access(grid_gdf, app_config, df_HH_buildings, data_HH):
+def estimate_hh_with_access(grid_gdf, app_config, data_HH, df_HH_buildings=None):
     """
     Estimates the number of households and population with electricity access and calculates access rates.
 

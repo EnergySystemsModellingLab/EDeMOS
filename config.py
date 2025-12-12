@@ -158,9 +158,14 @@ COL_BUI_ELEC_KWH_FINAL = 'bui_elec_kWh_final'
 # INDUSTRY PARAMETERS
 # -----------------------------------------------------------------------------
 MINES_DATA_PATH = ROOT_DIR / "Industry/Data/mines"
-MINES_INPUT_CSV = MINES_DATA_PATH / "Mineral_Facilities_correctedInput.csv"
-MINES_OUTPUT_GPKG = MINES_DATA_PATH / f"mineral_facilities_{COUNTRY.lower()}.gpkg"
-MINES_OUTPUT_CSV = MINES_DATA_PATH / f"mineral_facilities_{COUNTRY.lower()}.csv"
+USGS_DATA_PATH = MINES_DATA_PATH / "Africa_GIS.gdb"
+USGS_DATA_OUTPUT_PATH = MINES_DATA_PATH / "Africa_GIS"
+# Ensure folder for USGS output files exist
+USGS_DATA_OUTPUT_PATH.mkdir(exist_ok=True)
+MINES_INPUT_CSV = USGS_DATA_OUTPUT_PATH / "AFR_Mineral_Facilities.csv"
+# MINES_INPUT_CSV = MINES_DATA_PATH / "Mineral_Facilities_correctedInput.csv"
+TOTAL_PROD_USGS_FILE = MINES_DATA_PATH / USGS_TABLE
+ADD_INFO_FILE = MINES_DATA_PATH / "Additional_info.xlsx"
 COL_IND_ELEC_TJ = "ind_elec_TJ"
 COL_IND_ELEC_GWH = "ind_elec_GWh"
 COL_IND_ELEC_KWH = "ind_elec_kWh"
@@ -171,7 +176,8 @@ COL_IND_ELEC_SCALED_TJ = "ind_elec_scaled_TJ"
 
 INDUSTRY_OUTPUT_DIR = ROOT_DIR / "Industry/Outputs"
 INDUSTRY_OUTPUT_DIR.mkdir(exist_ok=True)
-
+MINES_OUTPUT_GPKG = INDUSTRY_OUTPUT_DIR / f"mineral_facilities_{COUNTRY.lower()}.gpkg"
+MINES_OUTPUT_CSV = INDUSTRY_OUTPUT_DIR / f"mineral_facilities_{COUNTRY.lower()}.csv"
 
 
 # -----------------------------------------------------------------------------

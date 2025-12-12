@@ -31,6 +31,13 @@ HEX_SIZE = 7 ## resolution info here https://h3geo.org/docs/core-library/restabl
 # BUFFER DISTANCE in meters.
 buffer_distance_meters = 1000 # This should be larger than half the diagonal of a hexagon
 
+
+# -----------------------------------------------------------------------------
+# INDUSTRY FILES
+# -----------------------------------------------------------------------------
+
+USGS_TABLE = "myb3-20-21-Zambia-advrel.xlsx"
+
 # -----------------------------------------------------------------------------
 # RESIDENTIAL FILES
 # -----------------------------------------------------------------------------

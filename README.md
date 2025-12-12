@@ -26,6 +26,8 @@ As required for the specific country (see below). Files need to be named and put
 - [read_DHS_hh_to_df.py](Buildings/HouseholdEnergyUse/read_DHS_hh_to_df.py)
 - [read_DHS_services_to_df.py](Buildings/HouseholdEnergyUse/read_DHS_services_to_df.py) 
 (select appropriate labels in config file)
+- [USGS_extract_data.py] (Industry/USGS_extract_data.py)
+NB: For Zambia, adjust in the AFR_Mineral_Facilities.csv file the value for DsgAttr07/Nchanga Copper Smelter/Cobalt to 3000 as indicated in MemoOther
 
 ### 5. Adjust census data
 In the census data file, the following colummns should be available: HH urban, rural, total, size of HH (urban and rural) and share women
