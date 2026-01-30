@@ -1,6 +1,8 @@
 # EDeMOS (Electricity Demand Mapping from Open-Source data)
-<pre>
-</pre>
+EDeMOS aims to produce a high resolution map of electricity demand consumption in low- and middle-income countries.
+
+This material has been produced with support from the Climate Compatible Growth (CCG) programme.
+
 
 ## Workflow steps
 
